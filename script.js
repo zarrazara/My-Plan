@@ -33,9 +33,17 @@ function catById(id){ return state.categories.find(c=>c.id===id) || {name:'Бе�
 function todayKey(){
   const d = new Date(); return d.toISOString().slice(0,10);
 }
+function mondayOfWeek(d){
+  const day = (d.getDay()+6)%7; // 0=Пн
+  const monday = new Date(d);
+  monday.setDate(d.getDate()-day);
+  return monday;
+}
 function dateKeyForDayIndex(dayIndex){
-  // returns most recent date matching that weekday (for "log" purposes we use explicit calendar dates separately)
-  return null;
+  const monday = mondayOfWeek(new Date());
+  const target = new Date(monday);
+  target.setDate(monday.getDate()+dayIndex);
+  return target.toISOString().slice(0,10);
 }
 
 function render(){
@@ -78,11 +86,11 @@ function isDoneOn(task, dateStr){
 function renderWeek(){
   const root = document.getElementById('viewRoot');
   const todayIdx = (new Date().getDay()+6)%7;
-  const dKey = todayKey();
+  const dKey = dateKeyForDayIndex(state.activeDay);
   const dayTasks = tasksForDay(state.activeDay);
   const isToday = state.activeDay === todayIdx;
-  const doneCount = isToday ? dayTasks.filter(t=>isDoneOn(t,dKey)).length : 0;
-  const pct = isToday && dayTasks.length ? Math.round(doneCount/dayTasks.length*100) : 0;
+  const doneCount = dayTasks.filter(t=>isDoneOn(t,dKey)).length;
+  const pct = dayTasks.length ? Math.round(doneCount/dayTasks.length*100) : 0;
 
   root.innerHTML = `
     <div class="daytabs">
@@ -91,7 +99,6 @@ function renderWeek(){
           ${d}${i===todayIdx?'<span class="today-dot"></span>':''}
         </button>`).join('')}
     </div>
-    ${isToday ? `
     <div class="day-progress">
       <svg class="ring" viewBox="0 0 44 44">
         <circle cx="22" cy="22" r="18" fill="none" stroke="#D9D0BC" stroke-width="4"/>
@@ -99,12 +106,13 @@ function renderWeek(){
           stroke-dasharray="${2*Math.PI*18}" stroke-dashoffset="${2*Math.PI*18*(1-pct/100)}" transform="rotate(-90 22 22)"/>
       </svg>
       <div class="txt">
-        <div class="n">${pct}% сегодня</div>
+        <div class="n">${pct}% ${isToday ? 'сегодня' : DOW_FULL[state.activeDay].toLowerCase()}</div>
         <div class="s">${doneCount} из ${dayTasks.length} сделано</div>
       </div>
-    </div>` : ''}
+    </div>
     <div id="taskListRoot"></div>
   `;
+
   document.querySelectorAll('.daytabs button').forEach(b=>{
     b.onclick = ()=>{ state.activeDay = parseInt(b.dataset.day); render(); };
   });

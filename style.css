@@ -129,8 +129,8 @@
   .field label{display:block; font-size:12px; font-weight:600; color:var(--ink-soft); margin-bottom:6px;}
   .field input[type=text], .field textarea{
     width:100%; border:1px solid var(--line); background:var(--white); border-radius:11px;
-    padding:11px 12px; font-family:'Inter'; font-size:14.5px; color:var(--ink); resize:none;
-  }
+    padding:11px 12px; font-family:'Inter'; font-size:16px; color:var(--ink); resize:none;
+}
   .field textarea{min-height:64px;}
   .field input:focus, .field textarea:focus{outline:2px solid var(--plum-soft); outline-offset:1px;}
   .chiprow{display:flex; flex-wrap:wrap; gap:7px;}
