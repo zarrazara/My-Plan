@@ -6,6 +6,17 @@ let state = { categories: [], tasks: [], view: 'week', activeDay: (new Date().ge
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
 
+function formatDateKey(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function parseDateKey(key){
+  const [y,m,d] = key.split('-').map(Number);
+  return new Date(y, m-1, d);
+}
+
 async function loadState(){
   try{
     const cats = localStorage.getItem('planner_categories');
@@ -31,7 +42,7 @@ async function saveTasks(){ try{ localStorage.setItem('planner_tasks', JSON.stri
 function catById(id){ return state.categories.find(c=>c.id===id) || {name:'Без категории', color:'#5B5A54'}; }
 
 function todayKey(){
-  const d = new Date(); return d.toISOString().slice(0,10);
+  return formatDateKey(new Date());
 }
 function mondayOfWeek(d){
   const day = (d.getDay()+6)%7; // 0=Пн
@@ -43,7 +54,7 @@ function dateKeyForDayIndex(dayIndex){
   const monday = mondayOfWeek(new Date());
   const target = new Date(monday);
   target.setDate(monday.getDate()+dayIndex);
-  return target.toISOString().slice(0,10);
+  return formatDateKey(target);
 }
 
 function render(){
@@ -76,8 +87,13 @@ function render(){
   else renderCalendar();
 }
 
-function tasksForDay(dayIndex){
-  return state.tasks.filter(t=>t.days.includes(dayIndex));
+function tasksForDate(dateKey){
+  const dayIndex = (parseDateKey(dateKey).getDay()+6)%7;
+  return state.tasks.filter(t=>{
+    const isRecurring = t.recurring !== false; // старые дела без этого поля = повторяющиеся
+    if(isRecurring) return (t.days||[]).includes(dayIndex);
+    return (t.dates||[]).includes(dateKey);
+  });
 }
 function isDoneOn(task, dateStr){
   return !!task.log[dateStr];
@@ -87,7 +103,7 @@ function renderWeek(){
   const root = document.getElementById('viewRoot');
   const todayIdx = (new Date().getDay()+6)%7;
   const dKey = dateKeyForDayIndex(state.activeDay);
-  const dayTasks = tasksForDay(state.activeDay);
+  const dayTasks = tasksForDate(dKey);
   const isToday = state.activeDay === todayIdx;
   const doneCount = dayTasks.filter(t=>isDoneOn(t,dKey)).length;
   const pct = dayTasks.length ? Math.round(doneCount/dayTasks.length*100) : 0;
@@ -204,13 +220,12 @@ function renderCalendar(){
       ${DOW.map(d=>`<div class="cal-dow">${d}</div>`).join('')}
       ${cells.map(c=>{
         if(c.other) return `<div class="cal-cell other">${c.n}</div>`;
-        const key = c.date.toISOString().slice(0,10);
-        const dayIdx = (c.date.getDay()+6)%7;
-        const scheduled = tasksForDay(dayIdx);
+        const key = formatDateKey(c.date);
+        const scheduled = tasksForDate(key);
         const doneN = scheduled.filter(t=>t.log[key]).length;
         const pct = scheduled.length ? Math.round(doneN/scheduled.length*100) : 0;
         const isToday = key===todayStr;
-        return `<div class="cal-cell ${isToday?'today':''}" data-datekey="${key}" data-dayidx="${dayIdx}">
+        return `<div class="cal-cell ${isToday?'today':''}" data-datekey="${key}">
           ${c.n}
           <div class="bar"><i style="width:${pct}%"></i></div>
         </div>`;
@@ -221,14 +236,18 @@ function renderCalendar(){
   document.getElementById('prevMonth').onclick = ()=>{ calMonth.setMonth(calMonth.getMonth()-1); renderCalendar(); };
   document.getElementById('nextMonth').onclick = ()=>{ calMonth.setMonth(calMonth.getMonth()+1); renderCalendar(); };
   root.querySelectorAll('.cal-cell[data-datekey]').forEach(el=>{
-    el.onclick = ()=>renderCalDetail(el.dataset.datekey, parseInt(el.dataset.dayidx));
+    el.onclick = ()=>{
+      state.selectedCalDate = el.dataset.datekey;
+      renderCalDetail(el.dataset.datekey);
+    };
   });
 }
 
-function renderCalDetail(dateKey, dayIdx){
+function renderCalDetail(dateKey){
   const root = document.getElementById('calDetail');
-  const scheduled = tasksForDay(dayIdx);
-  const d = new Date(dateKey);
+  const dayIdx = (parseDateKey(dateKey).getDay()+6)%7;
+  const scheduled = tasksForDate(dateKey);
+  const d = parseDateKey(dateKey);
   root.innerHTML = `
     <div class="cal-detail">
       <h4>${d.toLocaleDateString('ru-RU',{day:'numeric', month:'long'})} · ${DOW_FULL[dayIdx]}</h4>
@@ -253,12 +272,11 @@ function renderCalDetail(dateKey, dayIdx){
     el.onclick = async ()=>{
       const t = state.tasks.find(x=>x.id===el.dataset.taskid);
       const key = el.dataset.datekey;
-      if(t.log[key]){ delete t.log[key]; await saveTasks(); renderCalDetail(key, dayIdx); renderCalendar(); }
-      else{ t.log[key] = {note:''}; await saveTasks(); renderCalDetail(key, dayIdx); renderCalendar(); openNoteSheet(t.id, key, ()=>renderCalDetail(key,dayIdx)); }
+      if(t.log[key]){ delete t.log[key]; await saveTasks(); renderCalDetail(key); renderCalendar(); }
+      else{ t.log[key] = {note:''}; await saveTasks(); renderCalDetail(key); renderCalendar(); openNoteSheet(t.id, key, ()=>renderCalDetail(key)); }
     };
   });
 }
-
 /* ---------- Sheets (modals) ---------- */
 function openOverlay(html){
   document.getElementById('sheet').innerHTML = html;
@@ -269,9 +287,14 @@ document.getElementById('overlay').addEventListener('click', e=>{
   if(e.target.id === 'overlay') closeOverlay();
 });
 
-function openTaskSheet(taskId){
+function openTaskSheet(taskId, contextDateKey){
   const editing = !!taskId;
-  const task = editing ? state.tasks.find(t=>t.id===taskId) : {title:'', categoryId: state.categories[0]?.id, days:[state.activeDay]};
+  const defaultDateKey = contextDateKey || dateKeyForDayIndex(state.activeDay);
+  const task = editing ? state.tasks.find(t=>t.id===taskId) : {
+    title:'', categoryId: state.categories[0]?.id,
+    recurring: true, days:[state.activeDay], dates:[defaultDateKey]
+  };
+  const isRecurringInit = task.recurring !== false;
 
   openOverlay(`
     <h3>${editing?'Изменить дело':'Новое дело'}</h3>
@@ -298,10 +321,22 @@ function openTaskSheet(taskId){
       </div>
     </div>
     <div class="field">
+      <label>Тип</label>
+      <div class="chiprow">
+        <div class="chip mode-chip ${isRecurringInit?'selected':''}" id="modeRecurring" style="--chip-color:#20232B">Каждую неделю</div>
+        <div class="chip mode-chip ${!isRecurringInit?'selected':''}" id="modeOnce" style="--chip-color:#20232B">Разовое, на дату</div>
+      </div>
+    </div>
+    <div class="field" id="recurringField" style="display:${isRecurringInit?'block':'none'}">
       <label>Дни недели</label>
       <div class="daypick" id="dayPick">
-        ${DOW.map((d,i)=>`<button data-day="${i}" class="${task.days.includes(i)?'selected':''}">${d}</button>`).join('')}
+        ${DOW.map((d,i)=>`<button data-day="${i}" class="${(task.days||[]).includes(i)?'selected':''}">${d}</button>`).join('')}
       </div>
+      <button class="btn btn-ghost" id="allDaysBtn" style="width:100%; margin-top:8px; font-size:13px; padding:9px;">Каждый день</button>
+    </div>
+    <div class="field" id="onceField" style="display:${isRecurringInit?'none':'block'}">
+      <label>Дата</label>
+      <input type="date" id="f-date" value="${(task.dates && task.dates[0]) || defaultDateKey}">
     </div>
     <div class="sheet-actions">
       <button class="btn btn-ghost" id="cancelBtn">Отмена</button>
@@ -311,8 +346,9 @@ function openTaskSheet(taskId){
   `);
 
   let selectedCat = task.categoryId;
-  let selectedDays = new Set(task.days);
+  let selectedDays = new Set(task.days||[]);
   let newCatColor = SWATCHES[0];
+  let recurringMode = isRecurringInit;
 
   document.getElementById('catChips').querySelectorAll('.chip[data-catid]').forEach(el=>{
     el.onclick = ()=>{
@@ -341,6 +377,31 @@ function openTaskSheet(taskId){
       else{ selectedDays.add(day); el.classList.add('selected'); }
     };
   });
+  document.getElementById('allDaysBtn').onclick = ()=>{
+    const allSelected = selectedDays.size === 7;
+    const dayPickEl = document.getElementById('dayPick');
+    if(allSelected){
+      selectedDays.clear();
+      dayPickEl.querySelectorAll('button').forEach(b=>b.classList.remove('selected'));
+    } else {
+      for(let i=0;i<7;i++) selectedDays.add(i);
+      dayPickEl.querySelectorAll('button').forEach(b=>b.classList.add('selected'));
+    }
+  };
+  document.getElementById('modeRecurring').onclick = ()=>{
+    recurringMode = true;
+    document.getElementById('modeRecurring').classList.add('selected');
+    document.getElementById('modeOnce').classList.remove('selected');
+    document.getElementById('recurringField').style.display='block';
+    document.getElementById('onceField').style.display='none';
+  };
+  document.getElementById('modeOnce').onclick = ()=>{
+    recurringMode = false;
+    document.getElementById('modeOnce').classList.add('selected');
+    document.getElementById('modeRecurring').classList.remove('selected');
+    document.getElementById('recurringField').style.display='none';
+    document.getElementById('onceField').style.display='block';
+  };
   document.getElementById('cancelBtn').onclick = closeOverlay;
   if(editing){
     document.getElementById('deleteBtn').onclick = async ()=>{
@@ -360,13 +421,21 @@ function openTaskSheet(taskId){
       catId = newCat.id;
     }
     if(!catId) catId = state.categories[0]?.id;
-    const days = Array.from(selectedDays);
-    if(!days.length) days.push(state.activeDay);
+
+    let days = [], dates = [];
+    if(recurringMode){
+      days = Array.from(selectedDays);
+      if(!days.length) days.push(state.activeDay);
+    } else {
+      const dateVal = document.getElementById('f-date').value;
+      dates = [dateVal || defaultDateKey];
+    }
 
     if(editing){
-      task.title = title; task.categoryId = catId; task.days = days;
+      task.title = title; task.categoryId = catId;
+      task.recurring = recurringMode; task.days = days; task.dates = dates;
     } else {
-      state.tasks.push({id:uid(), title, categoryId:catId, days, log:{}});
+      state.tasks.push({id:uid(), title, categoryId:catId, recurring:recurringMode, days, dates, log:{}});
     }
     await saveTasks();
     closeOverlay(); render();
@@ -394,7 +463,15 @@ function openNoteSheet(taskId, dateKey, onSaved){
   };
 }
 
-document.getElementById('fabBtn').onclick = ()=>openTaskSheet(null);
+document.getElementById('fabBtn').onclick = ()=>{
+  let ctx = null;
+  if(state.view === 'week'){
+    ctx = dateKeyForDayIndex(state.activeDay);
+  } else if(state.view === 'calendar' && state.selectedCalDate){
+    ctx = state.selectedCalDate;
+  }
+  openTaskSheet(null, ctx);
+};
 
 /* ---------- Backup: export / import ---------- */
 function openBackupSheet(){

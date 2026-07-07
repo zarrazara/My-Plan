@@ -127,7 +127,7 @@
   .sheet h3{margin:0 0 16px; font-size:19px; font-weight:600;}
   .field{margin-bottom:14px;}
   .field label{display:block; font-size:12px; font-weight:600; color:var(--ink-soft); margin-bottom:6px;}
-  .field input[type=text], .field textarea{
+  .field input[type=text], .field input[type=date], .field textarea{
     width:100%; border:1px solid var(--line); background:var(--white); border-radius:11px;
     padding:11px 12px; font-family:'Inter'; font-size:16px; color:var(--ink); resize:none;
 }
