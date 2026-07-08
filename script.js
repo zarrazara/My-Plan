@@ -3,6 +3,11 @@ const DOW_FULL = ['Понедельник','Вторник','Среда','Чет
 const SWATCHES = ['#6B2E4F','#3E6E5E','#B4772F','#3D5A80','#8E4162','#5B7B4A','#A6432F','#4A5859'];
 
 let state = { categories: [], tasks: [], view: 'week', activeDay: (new Date().getDay()+6)%7 };
+let suppressNextClick = false;
+let dragState = null;
+let longPressTimer = null;
+let dragCandidateEl = null;
+let dragStartX = 0, dragStartY = 0;
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
 
@@ -67,6 +72,9 @@ function render(){
       </div>
       <div class="topbar-right">
         <div class="date-pill">${new Date().toLocaleDateString('ru-RU',{day:'numeric',month:'long'})}</div>
+        <button class="menu-btn" id="lockSettingsBtn" aria-label="Пароль">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </button>
         <button class="menu-btn" id="backupBtn" aria-label="Резервная копия">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         </button>
@@ -83,6 +91,8 @@ function render(){
   });
   const backupBtn = document.getElementById('backupBtn');
   if(backupBtn) backupBtn.onclick = openBackupSheet;
+  const lockBtn = document.getElementById('lockSettingsBtn');
+  if(lockBtn) lockBtn.onclick = openLockSettingsSheet;
   if(state.view === 'week') renderWeek();
   else renderCalendar();
 }
@@ -135,17 +145,11 @@ function renderWeek(){
   renderTaskList(dayTasks, dKey);
 }
 
-function renderTaskList(dayTasks, dKey){
-  const root = document.getElementById('taskListRoot');
-  if(!dayTasks.length){
-    root.innerHTML = `<div class="empty"><div class="display">Пока пусто</div><p>Нажми + и добавь первое дело на этот день</p></div>`;
-    return;
-  }
-  root.innerHTML = dayTasks.map(t=>{
-    const cat = catById(t.categoryId);
-    const done = isDoneOn(t, dKey);
-    return `
-    <div class="task ${done?'done':''}" style="--cat-color:${cat.color}">
+function taskCardHtml(t, dKey){
+  const cat = catById(t.categoryId);
+  const done = isDoneOn(t, dKey);
+  return `
+    <div class="task ${done?'done':''}" style="--cat-color:${cat.color}" data-drag-id="${t.id}">
       <div class="check ${done?'checked':''}" data-taskid="${t.id}">
         <svg viewBox="0 0 24 24"><polyline points="4 12 9 18 20 6"/></svg>
       </div>
@@ -160,20 +164,105 @@ function renderTaskList(dayTasks, dKey){
         </button>
       </div>
     </div>`;
-  }).join('');
+}
+
+function renderTaskList(dayTasks, dKey){
+  const root = document.getElementById('taskListRoot');
+  const recurring = dayTasks.filter(t=>t.recurring!==false).sort((a,b)=>(a.order||0)-(b.order||0));
+  const once = dayTasks.filter(t=>t.recurring===false).sort((a,b)=>(a.order||0)-(b.order||0));
+
+  if(!recurring.length && !once.length){
+    root.innerHTML = `<div class="empty"><div class="display">Пока пусто</div><p>Нажми + и добавь первое дело на этот день</p></div>`;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="task-group" data-group="recurring">${recurring.map(t=>taskCardHtml(t,dKey)).join('')}</div>
+    ${once.length ? `<div class="section-divider"></div><div class="task-group" data-group="once">${once.map(t=>taskCardHtml(t,dKey)).join('')}</div>` : ''}
+  `;
 
   root.querySelectorAll('.check').forEach(el=>{
-    el.onclick = ()=>toggleDone(el.dataset.taskid, dKey);
+    el.onclick = ()=>{ if(suppressNextClick) return; toggleDone(el.dataset.taskid, dKey); };
   });
   root.querySelectorAll('[data-editid]').forEach(el=>{
-    el.onclick = ()=>openTaskSheet(el.dataset.editid);
+    el.onclick = ()=>{ if(suppressNextClick) return; openTaskSheet(el.dataset.editid); };
   });
   root.querySelectorAll('[data-openid]').forEach(el=>{
     el.onclick = ()=>{
+      if(suppressNextClick) return;
       const t = state.tasks.find(x=>x.id===el.dataset.openid);
       if(isDoneOn(t, dKey)) openNoteSheet(t.id, dKey);
     };
   });
+
+  root.querySelectorAll('.task-group').forEach(groupEl=>{
+    attachDragHandlers(groupEl);
+  });
+}
+
+/* ---------- Drag reorder ---------- */
+function attachDragHandlers(groupEl){
+  groupEl.querySelectorAll('.task').forEach(taskEl=>{
+    taskEl.addEventListener('pointerdown', (e)=>{
+      if(e.target.closest('.check') || e.target.closest('.icon-btn')) return;
+      dragCandidateEl = taskEl;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      clearTimeout(longPressTimer);
+      longPressTimer = setTimeout(()=>{ startDrag(taskEl, groupEl, e.clientY); }, 320);
+    });
+  });
+}
+function cancelLongPress(){ clearTimeout(longPressTimer); dragCandidateEl = null; }
+
+document.addEventListener('pointermove', (e)=>{
+  if(dragCandidateEl && !dragState){
+    if(Math.abs(e.clientX-dragStartX)>10 || Math.abs(e.clientY-dragStartY)>10) cancelLongPress();
+  }
+  if(dragState){ e.preventDefault(); moveDrag(e.clientY); }
+}, {passive:false});
+document.addEventListener('pointerup', ()=>{ cancelLongPress(); if(dragState) endDrag(); });
+document.addEventListener('pointercancel', ()=>{ cancelLongPress(); if(dragState) endDrag(); });
+
+function startDrag(taskEl, groupEl, clientY){
+  const rect = taskEl.getBoundingClientRect();
+  const placeholder = document.createElement('div');
+  placeholder.className = 'task-placeholder';
+  placeholder.style.height = rect.height+'px';
+  taskEl.parentNode.insertBefore(placeholder, taskEl);
+  dragState = { taskEl, groupEl, placeholder, offsetY: clientY-rect.top };
+  taskEl.style.position='fixed';
+  taskEl.style.left=rect.left+'px'; taskEl.style.top=rect.top+'px'; taskEl.style.width=rect.width+'px';
+  taskEl.style.zIndex=999;
+  taskEl.classList.add('dragging-ghost');
+  if(navigator.vibrate) navigator.vibrate(8);
+}
+function moveDrag(clientY){
+  const {taskEl, groupEl, offsetY, placeholder} = dragState;
+  taskEl.style.top = (clientY-offsetY)+'px';
+  const siblings = Array.from(groupEl.querySelectorAll('.task:not(.dragging-ghost)'));
+  for(const sib of siblings){
+    const r = sib.getBoundingClientRect();
+    const midY = r.top + r.height/2;
+    if(clientY < midY){ groupEl.insertBefore(placeholder, sib); break; }
+    if(sib === siblings[siblings.length-1]) groupEl.appendChild(placeholder);
+  }
+}
+async function endDrag(){
+  const {taskEl, groupEl, placeholder} = dragState;
+  groupEl.insertBefore(taskEl, placeholder);
+  placeholder.remove();
+  taskEl.style.position=''; taskEl.style.left=''; taskEl.style.top=''; taskEl.style.width=''; taskEl.style.zIndex='';
+  taskEl.classList.remove('dragging-ghost');
+  suppressNextClick = true;
+  setTimeout(()=>{ suppressNextClick=false; }, 50);
+
+  const idsInOrder = Array.from(groupEl.querySelectorAll('.task')).map(el=>el.dataset.dragId);
+  idsInOrder.forEach((id, idx)=>{
+    const t = state.tasks.find(x=>x.id===id);
+    if(t) t.order = idx;
+  });
+  await saveTasks();
+  dragState = null;
 }
 
 async function toggleDone(taskId, dKey){
@@ -435,7 +524,9 @@ function openTaskSheet(taskId, contextDateKey){
       task.title = title; task.categoryId = catId;
       task.recurring = recurringMode; task.days = days; task.dates = dates;
     } else {
-      state.tasks.push({id:uid(), title, categoryId:catId, recurring:recurringMode, days, dates, log:{}});
+      const groupTasks = state.tasks.filter(x=>x.recurring===recurringMode);
+      const maxOrder = groupTasks.reduce((m,x)=>Math.max(m, x.order||0), -1);
+      state.tasks.push({id:uid(), title, categoryId:catId, recurring:recurringMode, days, dates, log:{}, order:maxOrder+1});
     }
     await saveTasks();
     closeOverlay(); render();
@@ -525,5 +616,73 @@ document.getElementById('importInput').addEventListener('change', async (e)=>{
   }
   e.target.value = '';
 });
+
+/* ---------- App lock ---------- */
+async function sha256(text){
+  const enc = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function getLockHash(){ return localStorage.getItem('planner_lock_hash'); }
+async function setLockPin(pin){ localStorage.setItem('planner_lock_hash', await sha256(pin)); }
+function removeLockPin(){ localStorage.removeItem('planner_lock_hash'); }
+
+let enteredPin = '';
+function showLockScreen(){
+  document.getElementById('lockScreen').style.display='flex';
+  enteredPin = ''; renderLockDots();
+  document.getElementById('lockError').textContent='';
+  renderLockKeypad();
+}
+function hideLockScreen(){ document.getElementById('lockScreen').style.display='none'; }
+function renderLockDots(){
+  document.getElementById('lockDots').innerHTML = Array.from({length:4}).map((_,i)=>
+    `<span class="lock-dot ${i<enteredPin.length?'filled':''}"></span>`).join('');
+}
+function renderLockKeypad(){
+  const keys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
+  const el = document.getElementById('lockKeypad');
+  el.innerHTML = keys.map(k=>k?`<button data-key="${k}" class="lock-key">${k}</button>`:'<span></span>').join('');
+  el.querySelectorAll('.lock-key').forEach(b=>{ b.onclick = ()=>onLockKey(b.dataset.key); });
+}
+async function onLockKey(key){
+  if(key==='⌫'){ enteredPin = enteredPin.slice(0,-1); renderLockDots(); return; }
+  if(enteredPin.length>=4) return;
+  enteredPin += key; renderLockDots();
+  if(enteredPin.length===4){
+    if(await sha256(enteredPin) === getLockHash()){ hideLockScreen(); }
+    else{
+      document.getElementById('lockError').textContent = 'Неверный пароль';
+      setTimeout(()=>{ enteredPin=''; renderLockDots(); }, 400);
+    }
+  }
+}
+function openLockSettingsSheet(){
+  const has = !!getLockHash();
+  openOverlay(`
+    <h3>Пароль на вход</h3>
+    <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px; line-height:1.5;">
+      ${has ? 'Пароль уже установлен. Можешь изменить его или убрать.' : 'Установи 4-значный пароль, который будет запрашиваться при открытии приложения.'}
+    </p>
+    <div class="field">
+      <label>${has?'Новый пароль':'Пароль'} (4 цифры)</label>
+      <input type="password" inputmode="numeric" maxlength="4" id="newPin" placeholder="••••">
+    </div>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="cancelLockBtn">Отмена</button>
+      <button class="btn btn-primary" id="saveLockBtn">Сохранить</button>
+    </div>
+    ${has?`<button class="btn btn-danger" id="removeLockBtn" style="width:100%; margin-top:12px;">Убрать пароль</button>`:''}
+  `);
+  document.getElementById('cancelLockBtn').onclick = closeOverlay;
+  document.getElementById('saveLockBtn').onclick = async ()=>{
+    const val = document.getElementById('newPin').value.trim();
+    if(!/^\d{4}$/.test(val)){ alert('Введи ровно 4 цифры.'); return; }
+    await setLockPin(val); closeOverlay();
+  };
+  if(has){ document.getElementById('removeLockBtn').onclick = ()=>{ removeLockPin(); closeOverlay(); }; }
+}
+
+if(getLockHash()) showLockScreen();
 
 loadState();

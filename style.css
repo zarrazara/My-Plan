@@ -181,3 +181,18 @@
   .cal-detail h4{margin:0 0 10px; font-size:14px;}
 
   ::-webkit-scrollbar{display:none;}
+
+  .section-divider{ height:1px; background:var(--line); margin:16px 0 12px; }
+  .task-placeholder{ border:2px dashed var(--line); border-radius:14px; margin-bottom:9px; }
+  .task.dragging-ghost{ box-shadow:0 10px 24px rgba(32,35,43,.25); opacity:.95; }
+
+  .lock-screen{ position:fixed; inset:0; background:var(--paper); z-index:999; display:none; align-items:center; justify-content:center; }
+  .lock-box{ text-align:center; padding:20px; }
+  .lock-title{ font-family:'Fraunces'; font-size:19px; font-weight:600; margin-bottom:18px; }
+  .lock-dots{ display:flex; gap:12px; justify-content:center; margin-bottom:10px; }
+  .lock-dot{ width:14px; height:14px; border-radius:50%; border:2px solid var(--line); background:transparent; }
+  .lock-dot.filled{ background:var(--ink); border-color:var(--ink); }
+  .lock-error{ font-size:12.5px; color:var(--danger); height:16px; margin-bottom:14px; }
+  .lock-keypad{ display:grid; grid-template-columns:repeat(3,64px); gap:14px; justify-content:center; }
+  .lock-key{ width:64px; height:64px; border-radius:50%; border:1px solid var(--line); background:var(--white); font-size:20px; font-weight:600; color:var(--ink); }
+  .lock-key:active{ background:var(--paper-2); }
